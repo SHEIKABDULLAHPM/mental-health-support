@@ -1,0 +1,56 @@
+# OS/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node
+node_modules/
+project/node_modules/
+project/dist/
+project/.vite/
+
+# Datasets / models / caches
+ml_service/datasets/
+ml_service/data/
+ml_service/models/
+ml_service/mood_pattern_recognition/saved_models/
+ml_service/mood_pattern_recognition/models/
+ml_service/mood_pattern_recognition/datasets/
+ml_service/qwen-emotion/adapters/
+ml_service/**/__pycache__/
+
+# Env/Secrets
+.env
+*.env
+project/.env
+ml_service/.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# Large ML artifacts
+ml_service/recommendation_engine/models/
+ml_service/recommendation_engine/utils/cache/
+sentiment_module/models/
+ml_service/mood_pattern_recognition/user_data/
+ml_service/mood_pattern_recognition/training/
+ml_service/mood_pattern_recognition/saved_models/
+ml_service/mood_pattern_recognition/datasets/
+ml_service/models/
+training/
+temp/
+*.pt
+*.bin
+*.onnx
+*.h5
+*.ckpt
+*.model
+*.jsonl
