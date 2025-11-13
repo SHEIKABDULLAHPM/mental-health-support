@@ -53,4 +53,6 @@ temp/
 *.h5
 *.ckpt
 *.model
-*.jsonl
+*.jsonlgit add .gitattributes .gitignore package.json package-lock.json
+git add audio ml_service project
+git status
