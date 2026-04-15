@@ -994,7 +994,6 @@ export const chatbotAPI = {
 
     let keepReading = true;
     while (keepReading) {
-      // eslint-disable-next-line no-await-in-loop
       const { done, value } = await reader.read();
       if (done) {
         keepReading = false;
