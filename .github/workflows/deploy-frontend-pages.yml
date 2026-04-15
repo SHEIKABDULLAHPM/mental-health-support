@@ -26,6 +26,7 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        continue-on-error: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
