@@ -1,0 +1,26 @@
+# Global
+.DS_Store
+Thumbs.db
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache/
+ml_service/.env
+
+# Node/Frontend
+node_modules/
+dist/
+.vite/
+.env
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# IDE
+.vscode/

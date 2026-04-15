@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Voice Emotion Detection - ML Service Startup Script
+
+echo "========================================"
+echo "  Voice Emotion Detection ML Service"
+echo "========================================"
+echo ""
+
+# Check if Python is installed
+if ! command -v python3 &> /dev/null
+then
+    echo "❌ Python 3 is not installed. Please install Python 3.8 or higher."
+    exit 1
+fi
+
+echo "✓ Python detected: $(python3 --version)"
+echo ""
+
+# Navigate to ml_service directory
+cd "$(dirname "$0")"
+
+# Check if virtual environment exists
+if [ ! -d "venv" ]; then
+    echo "📦 Creating virtual environment..."
+    python3 -m venv venv
+    echo "✓ Virtual environment created"
+    echo ""
+fi
+
+# Activate virtual environment
+echo "🔄 Activating virtual environment..."
+source venv/bin/activate
+
+# Install/upgrade dependencies
+echo "📥 Installing dependencies..."
+pip install --upgrade pip
+pip install -r requirements.txt
+
+echo ""
+echo "========================================"
+echo "✓ Setup complete!"
+echo "========================================"
+echo ""
+
+# Start the Flask service
+echo "🚀 Starting ML Service on http://localhost:5000"
+echo ""
+echo "Press Ctrl+C to stop the service"
+echo ""
+
+python app.py

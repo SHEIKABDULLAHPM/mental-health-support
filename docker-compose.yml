@@ -1,0 +1,162 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: mentalhealth-mongodb
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mentalhealth-net
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mentalhealth-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+    networks:
+      - mentalhealth-net
+    restart: unless-stopped
+
+  llm-service:
+    build:
+      context: ./llm_service
+      dockerfile: Dockerfile
+    container_name: mentalhealth-llm
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-llama3.1}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    ports:
+      - "${LLM_PORT:-11434}:11434"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:11434/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 8
+    networks:
+      - mentalhealth-net
+    restart: unless-stopped
+
+  ml-service:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    container_name: mentalhealth-ml
+    environment:
+      PORT: 5000
+      HOST: 0.0.0.0
+      FLASK_DEBUG: "False"
+      MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017/mental_health}
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-mental_health}
+      ENABLE_EMOTION: ${ENABLE_EMOTION:-false}
+      ENABLE_FACE_EMOTION: ${ENABLE_FACE_EMOTION:-true}
+      LLM_API_URL: ${LLM_API_URL:-http://llm-service:11434}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-in-production}
+      JWT_ALGORITHM: HS256
+      ML_REQUIRE_JWT: ${ML_REQUIRE_JWT:-true}
+    volumes:
+      - ml_data:/app/data
+      - ml_temp:/app/temp
+      - ml_models:/app/models
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      llm-service:
+        condition: service_healthy
+    ports:
+      - "${ML_PORT:-5000}:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - mentalhealth-net
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mentalhealth-backend
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      BACKEND_PORT: 3000
+      MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017/mental_health}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-in-production}
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://frontend,http://localhost:80,http://localhost:5173}
+      ML_SERVICE_URL: ${ML_SERVICE_URL:-http://ml-service:5000}
+      LLM_API_URL: ${LLM_API_URL:-http://llm-service:11434}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+      llm-service:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    networks:
+      - mentalhealth-net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./project
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: ${REACT_APP_API_URL:-/api}
+        VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:-/auth-api}
+    container_name: mentalhealth-frontend
+    depends_on:
+      ml-service:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mentalhealth-net
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  ml_data:
+  ml_temp:
+  ml_models:
+  hf_cache:
+  ollama_data:
+
+networks:
+  mentalhealth-net:
+    driver: bridge
+

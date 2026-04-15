@@ -1,0 +1,37 @@
+# OS/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+project/node_modules/
+project/dist/
+project/.vite/
+
+# Environments / secrets
+.env
+*.env
+!*.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# ML artifacts and caches
+ml_service/**/__pycache__/
+ml_service/temp/
+
+# Quarantine area (kept out of commits)
+cleanup_quarantine/
