@@ -1,3 +1,4 @@
+import { validationResult } from 'express-validator';
 import { ApiError } from '../utils/errors.js';
 import { sendSuccess } from '../utils/response.js';
 import { EmotionAnalysis } from '../models/EmotionAnalysis.js';
@@ -130,10 +131,18 @@ export async function detectFaceEmotion(req, res) {
 }
 
 export async function listMyEmotionAnalyses(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
   const { user } = req.auth;
-  const modality = req.query.modality ? String(req.query.modality).trim() : null;
+  const { modality } = req.query;
   const query = { userId: user._id };
-  if (modality) query.modality = modality;
+  if (modality) {
+    query.modality = modality;
+  }
 
   const rows = await EmotionAnalysis.find(query).sort({ createdAt: -1 }).limit(100);
   return sendSuccess(req, res, rows);

@@ -3,13 +3,10 @@
   "private": true,
   "scripts": {
     "start:docker": "docker compose up --build",
-    "verify:py": "py -3 -m py_compile ml_service/app.py llm_service/main.py ml_service/training/fine_tune.py",
+    "verify:py": "py -3 -m py_compile ml_service/app.py llm_service/main.py",
     "frontend:install": "npm --prefix project install",
     "frontend:dev": "npm --prefix project run dev",
     "backend:install": "npm --prefix backend install",
     "backend:dev": "npm --prefix backend run dev"
-  },
-  "dependencies": {
-    "framer-motion": "^12.23.24"
   }
 }

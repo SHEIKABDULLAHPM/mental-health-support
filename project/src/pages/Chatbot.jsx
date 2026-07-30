@@ -1,819 +1,656 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Send, Bot, User, Heart, Lightbulb, MessageCircle, Mic, MicOff, Volume2, VolumeX, Globe, Loader2, Brain } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  Bot,
+  Brain,
+  CheckCircle2,
+  Clock3,
+  Info,
+  Loader2,
+  MessageCircle,
+  Mic,
+  MicOff,
+  Plus,
+  RefreshCw,
+  Send,
+  Sparkles,
+  Trash2,
+  User,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { chatbotAPI, sentimentAPI } from '../services/api';
 import SentimentCard from '../components/SentimentCard';
 import { formatShortTime } from '../utils/dateTime';
 
+const ROLE_OPTIONS = [
+  {
+    id: 'therapeutic',
+    label: 'Therapeutic',
+    icon: Brain,
+    description: 'CBT-informed reflection, coping steps, and gentle questions.',
+  },
+  {
+    id: 'emotional',
+    label: 'Emotional Support',
+    icon: Sparkles,
+    description: 'Warm validation, grounding, and steady emotional presence.',
+  },
+  {
+    id: 'informational',
+    label: 'Informational',
+    icon: Info,
+    description: 'Concise psychoeducation and practical mental health facts.',
+  },
+];
+
+const LANGUAGES = [
+  { code: 'english', name: 'English', voice: 'en-US' },
+  { code: 'hindi', name: 'Hindi', voice: 'hi-IN' },
+  { code: 'spanish', name: 'Spanish', voice: 'es-ES' },
+  { code: 'french', name: 'French', voice: 'fr-FR' },
+];
+
+const WELCOME_MESSAGE = {
+  id: 'welcome',
+  sender: 'bot',
+  text: "Hi, I'm Healing Chat. Choose the kind of support you want, then tell me what's been on your mind.",
+  timestamp: new Date().toISOString(),
+  isAIGenerated: false,
+};
+
+const normalizeMessages = (conversation) => {
+  const rows = Array.isArray(conversation?.messages) ? conversation.messages : [];
+  if (!rows.length) return [WELCOME_MESSAGE];
+
+  return rows.map((message, index) => ({
+    id: `${conversation._id || conversation.id}-${index}-${message.createdAt || Date.now()}`,
+    sender: message.sender === 'assistant' ? 'bot' : message.sender,
+    text: message.text,
+    timestamp: message.createdAt || conversation.updatedAt || new Date().toISOString(),
+    metadata: message.meta || {},
+    isAIGenerated: message.sender === 'assistant',
+  }));
+};
+
 const Chatbot = () => {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState('english');
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [personalityType, setPersonalityType] = useState('balanced');
-  const [chatMode, setChatMode] = useState('therapeutic'); // therapeutic | emotional | informational
-  
-  // MentaLLaMA integration states
+  const [chatMode, setChatMode] = useState('therapeutic');
   const [conversationId, setConversationId] = useState(null);
-  const [mlServiceStatus, setMlServiceStatus] = useState('checking');
-  const [chatModel, setChatModel] = useState(null);
-  const [llmServiceAvailable, setLlmServiceAvailable] = useState(false);
-  
-  // Enhanced conversation context tracking
-  const [conversationContext, setConversationContext] = useState(null);
-  const [showContextPanel, setShowContextPanel] = useState(false);
-  
+  const [conversations, setConversations] = useState([]);
+  const [serviceStatus, setServiceStatus] = useState('checking');
+  const [modelInfo, setModelInfo] = useState(null);
+  const [ragInfo, setRagInfo] = useState(null);
+  const [lastRisk, setLastRisk] = useState(null);
+  const [loadError, setLoadError] = useState('');
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const recognitionRef = useRef(null);
   const synthRef = useRef(null);
 
-  const languages = useMemo(() => [
-    { code: 'english', name: 'English', flag: '🇺🇸', voice: 'en-US' },
-    { code: 'hindi', name: 'हिंदी', flag: '🇮🇳', voice: 'hi-IN' },
-    { code: 'tamil', name: 'தமிழ்', flag: '🇮🇳', voice: 'ta-IN' },
-    { code: 'telugu', name: 'తెలుగు', flag: '🇮🇳', voice: 'te-IN' },
-    { code: 'kannada', name: 'ಕನ್ನಡ', flag: '🇮🇳', voice: 'kn-IN' },
-    { code: 'malayalam', name: 'മലയാളം', flag: '🇮🇳', voice: 'ml-IN' },
-    { code: 'bengali', name: 'বাংলা', flag: '🇮🇳', voice: 'bn-IN' },
-    { code: 'gujarati', name: 'ગુજરાતી', flag: '🇮🇳', voice: 'gu-IN' },
-    { code: 'marathi', name: 'मराठी', flag: '🇮🇳', voice: 'mr-IN' },
-    { code: 'punjabi', name: 'ਪੰਜਾਬੀ', flag: '🇮🇳', voice: 'pa-IN' },
-    { code: 'urdu', name: 'اردو', flag: '🇮🇳', voice: 'ur-IN' },
-    { code: 'spanish', name: 'Español', flag: '🇪🇸', voice: 'es-ES' },
-    { code: 'french', name: 'Français', flag: '🇫🇷', voice: 'fr-FR' },
-    { code: 'german', name: 'Deutsch', flag: '🇩🇪', voice: 'de-DE' },
-    { code: 'chinese', name: '中文', flag: '🇨🇳', voice: 'zh-CN' },
-    { code: 'japanese', name: '日本語', flag: '🇯🇵', voice: 'ja-JP' },
-    { code: 'korean', name: '한국어', flag: '🇰🇷', voice: 'ko-KR' },
-    { code: 'arabic', name: 'العربية', flag: '🇸🇦', voice: 'ar-SA' },
-    { code: 'russian', name: 'Русский', flag: '🇷🇺', voice: 'ru-RU' },
-    { code: 'portuguese', name: 'Português', flag: '🇧🇷', voice: 'pt-BR' },
-  ], []);
+  const activeRole = useMemo(
+    () => ROLE_OPTIONS.find((role) => role.id === chatMode) || ROLE_OPTIONS[0],
+    [chatMode]
+  );
 
-  const getWelcomeMessage = useCallback(() => {
-    const welcomeMessages = {
-      english: "Hey there! I'm Streaky 🌟 your mental health companion. I'm here to listen, support, and help you navigate your emotions with empathy and understanding. How are you feeling today?",
-      hindi: "नमस्ते! मैं आपका व्यक्तिगत उपचार साथी हूं, आपकी कल्याण यात्रा में 24/7 सहायता के लिए उपलब्ध हूं। मैं यहां सुनने, मार्गदर्शन करने और आपको शांति पाने में मदद करने के लिए हूं। आज आप कैसा महसूस कर रहे हैं?",
-      tamil: "வணக்கம்! நான் உங்கள் தனிப்பட்ட குணப்படுத்தும் துணை, உங்கள் நல்வாழ்வு பயணத்தில் 24/7 ஆதரவு வழங்க கிடைக்கிறேன். நான் கேட்க, வழிகாட்ட மற்றும் அமைதி கண்டுபிடிக்க உதவ இங்கே இருக்கிறேன். இன்று நீங்கள் எப்படி உணர்கிறீர்கள்?",
-      telugu: "నమస్కారం! నేను మీ వ్యక్తిగత వైద్య సహాయకుడిని, మీ సంక్షేమ ప్రయాణంలో 24/7 మద్దతు అందించడానికి అందుబాటులో ఉన్నాను. నేను వినడానికి, మార్గదర్శనం చేయడానికి మరియు శాంతిని కనుగొనడంలో సహాయం చేయడానికి ఇక్కడ ఉన్నాను. ఈరోజు మీరు ఎలా అనుభవిస్తున్నారు?",
-      kannada: "ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ ವೈಯಕ್ತಿಕ ಗುಣಪಡಿಸುವ ಸಹಚರ, ನಿಮ್ಮ ಯೋಗಕ್ಷೇಮ ಪ್ರಯಾಣದಲ್ಲಿ 24/7 ಬೆಂಬಲ ನೀಡಲು ಲಭ್ಯವಿದ್ದೇನೆ. ನಾನು ಕೇಳಲು, ಮಾರ್ಗದರ್ಶನ ನೀಡಲು ಮತ್ತು ಶಾಂತಿ ಕಂಡುಕೊಳ್ಳಲು ಸಹಾಯ ಮಾಡಲು ಇಲ್ಲಿದ್ದೇನೆ. ಇಂದು ನೀವು ಹೇಗೆ ಅನುಭವಿಸುತ್ತಿದ್ದೀರಿ?",
-      malayalam: "നമസ്കാരം! ഞാൻ നിങ്ങളുടെ വ്യക്തിഗത രോഗശാന്തി കൂട്ടാളിയാണ്, നിങ്ങളുടെ ക്ഷേമ യാത്രയിൽ 24/7 പിന്തുണ നൽകാൻ ലഭ്യമാണ്. കേൾക്കാനും, മാർഗനിർദേശം നൽകാനും, സമാധാനം കണ്ടെത്താൻ സഹായിക്കാനും ഞാൻ ഇവിടെയുണ്ട്. ഇന്ന് നിങ്ങൾക്ക് എങ്ങനെ തോന്നുന്നു?",
-      bengali: "নমস্কার! আমি আপনার ব্যক্তিগত নিরাময় সহচর, আপনার কল্যাণ যাত্রায় ২৪/৭ সহায়তা প্রদানের জন্য উপলব্ধ। আমি শুনতে, গাইড করতে এবং শান্তি খুঁজে পেতে সাহায্য করতে এখানে আছি। আজ আপনি কেমন অনুভব করছেন?",
-      gujarati: "નમસ્તે! હું તમારો વ્યક્તિગત ઉપચાર સાથી છું, તમારી કલ્યાણ યાત્રામાં 24/7 સહાય પૂરી પાડવા માટે ઉપલબ્ધ છું. હું સાંભળવા, માર્ગદર્શન આપવા અને શાંતિ શોધવામાં મદદ કરવા અહીં છું. આજે તમે કેવું લાગે છે?",
-      marathi: "नमस्कार! मी तुमचा वैयक्तिक उपचार सहकारी आहे, तुमच्या कल्याणाच्या प्रवासात 24/7 समर्थन प्रदान करण्यासाठी उपलब्ध आहे. मी ऐकण्यासाठी, मार्गदर्शन करण्यासाठी आणि शांती शोधण्यात मदत करण्यासाठी येथे आहे. आज तुम्हाला कसे वाटते?",
-      punjabi: "ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਮੈਂ ਤੁਹਾਡਾ ਨਿੱਜੀ ਇਲਾਜ ਸਾਥੀ ਹਾਂ, ਤੁਹਾਡੇ ਸਿਹਤ ਦੇ ਸਫ਼ਰ ਵਿੱਚ 24/7 ਸਹਾਇਤਾ ਪ੍ਰਦਾਨ ਕਰਨ ਲਈ ਉਪਲਬਧ ਹਾਂ। ਮੈਂ ਸੁਣਨ, ਮਾਰਗਦਰਸ਼ਨ ਕਰਨ ਅਤੇ ਸ਼ਾਂਤੀ ਪਾਉਣ ਵਿੱਚ ਮਦਦ ਕਰਨ ਲਈ ਇੱਥੇ ਹਾਂ। ਅੱਜ ਤੁਸੀਂ ਕਿਵੇਂ ਮਹਿਸੂਸ ਕਰ ਰਹੇ ਹੋ?",
-      urdu: "آداب! میں آپ کا ذاتی شفا یابی کا ساتھی ہوں، آپ کے فلاح و بہبود کے سفر میں 24/7 مدد فراہم کرنے کے لیے دستیاب ہوں۔ میں سننے، رہنمائی کرنے اور سکون تلاش کرنے میں مدد کے لیے یہاں ہوں۔ آج آپ کیسا محسوس کر رہے ہیں؟",
-      spanish: "¡Hola! Soy tu compañero personal de sanación, disponible 24/7 para apoyarte en tu viaje de bienestar. Estoy aquí para escuchar, guiar y ayudarte a encontrar paz. ¿Cómo te sientes hoy?",
-      french: "Bonjour! Je suis votre compagnon personnel de guérison, disponible 24h/24 et 7j/7 pour vous soutenir dans votre parcours de bien-être. Je suis là pour écouter, guider et vous aider à trouver la paix. Comment vous sentez-vous aujourd'hui?",
-      german: "Hallo! Ich bin dein persönlicher Heilungsbegleiter, 24/7 verfügbar, um dich auf deiner Wellness-Reise zu unterstützen. Ich bin hier, um zuzuhören, zu leiten und dir zu helfen, Frieden zu finden. Wie fühlst du dich heute?",
-      chinese: "你好！我是你的个人康复伴侣，全天候为你的健康之旅提供支持。我在这里倾听、指导并帮助你找到内心的平静。你今天感觉如何？",
-      japanese: "こんにちは！私はあなたの個人的な癒しのパートナーで、あなたの健康な旅を24時間年中無休でサポートします。私は聞いて、導いて、平安を見つけるお手伝いをするためにここにいます。今日はいかがお過ごしですか？",
-      korean: "안녕하세요! 저는 당신의 개인적인 치유 동반자로, 당신의 웰니스 여정에서 24시간 연중무휴로 지원하기 위해 여기 있습니다. 저는 듣고, 안내하며, 평화를 찾도록 도와주기 위해 여기 있습니다. 오늘 기분이 어떠신가요?",
-      arabic: "مرحباً! أنا رفيقك الشخصي للشفاء، متاح على مدار الساعة طوال أيام الأسبوع لدعمك في رحلة العافية. أنا هنا للاستماع والإرشاد ومساعدتك في العثور على السلام. كيف تشعر اليوم؟",
-      russian: "Привет! Я ваш личный спутник исцеления, доступный 24/7 для поддержки в вашем путешествии к благополучию. Я здесь, чтобы слушать, направлять и помогать вам найти покой. Как вы себя чувствуете сегодня?",
-      portuguese: "Olá! Eu sou seu companheiro pessoal de cura, disponível 24/7 para apoiá-lo em sua jornada de bem-estar. Estou aqui para ouvir, orientar e ajudá-lo a encontrar paz. Como você se sente hoje?"
-    };
+  const selectedVoice = useMemo(
+    () => LANGUAGES.find((language) => language.code === selectedLanguage)?.voice || 'en-US',
+    [selectedLanguage]
+  );
 
-    return welcomeMessages[selectedLanguage] || welcomeMessages.english;
-  }, [selectedLanguage]);
+  const refreshHealth = useCallback(async () => {
+    try {
+      const health = await chatbotAPI.checkLLMHealth();
+      const llmAvailable = Boolean(health?.data?.llm?.available);
+      setServiceStatus(llmAvailable ? 'online' : 'degraded');
+      setModelInfo(health?.data?.llm || null);
+      setLoadError('');
+    } catch (error) {
+      setServiceStatus('offline');
+      setLoadError(error.message || 'Unable to reach the chat service.');
+    }
+  }, []);
 
-  // Initialize ML service and check health
+  const loadConversations = useCallback(async () => {
+    const rows = await chatbotAPI.listConversations();
+    const list = Array.isArray(rows) ? rows : [];
+    setConversations(list);
+
+    if (!conversationId && list.length > 0) {
+      const latest = list[0];
+      setConversationId(latest._id);
+      setChatMode(latest.mode || 'therapeutic');
+      setMessages(normalizeMessages(latest));
+    }
+  }, [conversationId]);
+
   useEffect(() => {
-    const checkServices = async () => {
-      try {
-        setMlServiceStatus('checking');
-        
-        // Check LLM service first
-        const llmHealth = await chatbotAPI.checkLLMHealth();
-        if (llmHealth.status === 'success') {
-          setMlServiceStatus('connected');
-          setLlmServiceAvailable(true);
-          
-          try {
-            const modelInfo = await chatbotAPI.getChatInfo();
-            if (modelInfo && modelInfo.model_status) {
-              setChatModel(modelInfo.model_status.model_name || 'LLM Assistant');
-            } else {
-              setChatModel('LLM Assistant');
-            }
-          } catch (error) {
-            console.log('Model info not available, using default name');
-            setChatModel('LLM Assistant');
-          }
-          return;
-        }
-        
-        // Fallback to legacy health check
-        const healthData = await chatbotAPI.checkHealth();
-        if (healthData.status === 'healthy') {
-          setMlServiceStatus('connected');
-          setLlmServiceAvailable(false);
-          
-          try {
-            const chatInfo = await chatbotAPI.getChatInfo();
-            if (chatInfo && chatInfo.model) {
-              setChatModel(chatInfo.model);
-            } else {
-              setChatModel('MentaLLaMA-7B');
-            }
-          } catch (error) {
-            console.log('Chat info not available, using default model name');
-            setChatModel('AI Assistant');
-          }
-        } else {
-          setMlServiceStatus('offline');
-          setLlmServiceAvailable(false);
-        }
-      } catch (error) {
-        console.error('Service check failed:', error);
-        setMlServiceStatus('offline');
-        setLlmServiceAvailable(false);
-      }
-    };
+    refreshHealth();
+    loadConversations().catch((error) => {
+      setLoadError(error.message || 'Conversation history could not be loaded.');
+    });
 
-    checkServices();
-    
-    // Check every 30 seconds
-    const interval = setInterval(checkServices, 30000);
+    const interval = setInterval(refreshHealth, 30000);
     return () => clearInterval(interval);
+  }, [loadConversations, refreshHealth]);
+
+  useEffect(() => {
+    try {
+      const savedPersonality = localStorage.getItem('mindpeace-personality');
+      if (savedPersonality) {
+        const parsed = JSON.parse(savedPersonality);
+        if (parsed?.preferredLanguage) setSelectedLanguage(parsed.preferredLanguage);
+      }
+    } catch {
+      // Local preferences are optional.
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.onresult = (event) => {
+        setInputMessage(event.results[0][0].transcript);
+        setIsListening(false);
+      };
+      recognitionRef.current.onerror = () => setIsListening(false);
+      recognitionRef.current.onend = () => setIsListening(false);
+    }
+
+    synthRef.current = window.speechSynthesis || null;
+
+    return () => {
+      recognitionRef.current?.stop();
+      synthRef.current?.cancel();
+    };
   }, []);
 
   useEffect(() => {
-    // Load personality type from localStorage
-    const savedPersonality = localStorage.getItem('mindpeace-personality');
-    if (savedPersonality) {
-      const personality = JSON.parse(savedPersonality);
-      setPersonalityType(personality.chatbotPersonality || 'balanced');
-    }
-
-    // Initialize conversation ID
-  const newConversationId = `chat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    setConversationId(newConversationId);
-
-    // Initialize with welcome message
-    const welcomeMessage = getWelcomeMessage();
-    setMessages([{
-      id: 1,
-      text: welcomeMessage,
-      sender: 'bot',
-      timestamp: new Date().toISOString(),
-      type: 'greeting'
-    }]);
-
-    // Try to initialize LLM conversation (delayed to allow service status to be determined)
-    const initializeLLMConversation = async () => {
-      try {
-  const startResponse = await chatbotAPI.startConversation('greeting', chatMode);
-        if (startResponse.conversationId) {
-          setConversationId(startResponse.conversationId);
-          
-          // Optionally update welcome message with LLM-generated one
-          if (startResponse.message && startResponse.message !== welcomeMessage) {
-            setMessages([{
-              id: 1,
-              text: startResponse.message,
-              sender: 'bot',
-              timestamp: startResponse.timestamp,
-              type: 'greeting',
-              isAIGenerated: true
-            }]);
-          }
-        }
-      } catch (error) {
-        console.log('Could not initialize LLM conversation, using default setup');
-      }
-    };
-
-    // Delay LLM initialization to allow service status check
-    setTimeout(initializeLLMConversation, 2000);
-
-    // Initialize speech recognition
-    try {
-      if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        recognitionRef.current = new SpeechRecognition();
-        recognitionRef.current.continuous = false;
-        recognitionRef.current.interimResults = false;
-        recognitionRef.current.lang = languages.find(l => l.code === selectedLanguage)?.voice || 'en-US';
-
-        recognitionRef.current.onresult = (event) => {
-          const transcript = event.results[0][0].transcript;
-          setInputMessage(transcript);
-          setIsListening(false);
-        };
-
-        recognitionRef.current.onerror = () => {
-          setIsListening(false);
-        };
-
-        recognitionRef.current.onend = () => {
-          setIsListening(false);
-        };
-      }
-    } catch (error) {
-      console.warn('Speech recognition initialization failed:', error);
-      // Speech recognition will not be available, but app will continue to work
-    }
-
-    // Initialize speech synthesis
-    synthRef.current = window.speechSynthesis;
-
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-      if (synthRef.current) {
-        synthRef.current.cancel();
-      }
-    };
-  }, [selectedLanguage, languages, getWelcomeMessage, chatMode]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
-  const speakMessage = (text) => {
-    if (!voiceEnabled || !synthRef.current) return;
+  const speakMessage = useCallback(
+    (text) => {
+      if (!voiceEnabled || !synthRef.current || !text) return;
+      synthRef.current.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = selectedVoice;
+      utterance.rate = 0.92;
+      utterance.volume = 0.85;
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      synthRef.current.speak(utterance);
+    },
+    [selectedVoice, voiceEnabled]
+  );
 
-    synthRef.current.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const selectedLang = languages.find(l => l.code === selectedLanguage);
-    
-    if (selectedLang) {
-      utterance.lang = selectedLang.voice;
-    }
-    
-    utterance.rate = 0.9;
-    utterance.pitch = 1;
-    utterance.volume = 0.8;
-
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-
-    synthRef.current.speak(utterance);
-  };
-
-  const startListening = () => {
-    if (!recognitionRef.current) return;
-
-    setIsListening(true);
-    recognitionRef.current.lang = languages.find(l => l.code === selectedLanguage)?.voice || 'en-US';
-    recognitionRef.current.start();
-  };
-
-  const stopListening = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-    setIsListening(false);
-  };
-
-  const toggleSpeech = () => {
-    if (isSpeaking) {
-      synthRef.current?.cancel();
-      setIsSpeaking(false);
-    } else {
-      setVoiceEnabled(!voiceEnabled);
-    }
-  };
-
-  const sendMessage = async (messageText = inputMessage) => {
-    if (!messageText.trim()) return;
-
-    const msgId = Date.now();
-    const userMessage = {
-      id: msgId,
-      text: messageText,
-      sender: 'user',
-      timestamp: new Date().toISOString()
-    };
-
-    setMessages(prev => [...prev, userMessage]);
+  const startNewConversation = () => {
+    synthRef.current?.cancel();
+    setConversationId(null);
+    setMessages([WELCOME_MESSAGE]);
+    setLastRisk(null);
+    setRagInfo(null);
     setInputMessage('');
-    setIsTyping(true);
+    inputRef.current?.focus();
+  };
 
-    // Start response time tracking
-    const startTime = performance.now();
-
-    // Run sentiment analysis concurrently to avoid delaying first streamed tokens.
-    void sentimentAPI
-      .analyzeText(messageText, 'vader', { extractKeywords: true })
-      .then((sentimentResult) => {
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, sentiment: sentimentResult } : m));
-        if (sentimentResult?.label && sentimentResult.label.toLowerCase().includes('suicidal')) {
-          console.warn('CRITICAL: Suicidal sentiment detected');
-        }
-        return sentimentResult;
-      })
-      .catch((err) => {
-        console.warn('Sentiment analysis failed:', err);
-        return null;
-      });
-
-    try {
-      // Insert a live-updating placeholder message for token streaming.
-      const botMsgId = Date.now() + 1;
-      let streamedText = '';
-      setMessages(prev => [...prev, {
-        id: botMsgId,
-        text: '',
-        sender: 'bot',
-        timestamp: new Date().toISOString(),
-        isTyping: true,
-        isStreaming: true
-      }]);
-
-      // ⭐ EMOTION ENHANCEMENT: Configure temperature and mode
-      const temperatureMap = {
-        creative: 0.9,
-        analytical: 0.5,
-        empathetic: 0.8,
-        mindful: 0.7,
-        balanced: 0.7
-      };
-      
-      const modeMap = {
-        therapeutic: 'therapeutic',
-        emotional: 'emotional',
-        informational: 'informational'
-      };
-      
-      const temperature = temperatureMap[personalityType] || 0.7;
-      const mode = modeMap[chatMode] || chatMode;
-      
-      const response = await chatbotAPI.sendMessageStream(userMessage.text, conversationId, {
-        maxLength: 512,
-        temperature: temperature,
-        mode: mode,
-        personalityType: personalityType,
-        language: selectedLanguage,
-        sentiment: null
-      }, {
-        onMeta: (meta) => {
-          if (meta?.conversation_id) {
-            setConversationId(meta.conversation_id);
-          }
-        },
-        onToken: (token) => {
-          streamedText += token;
-          setMessages(prev => prev.map((m) => (
-            m.id === botMsgId
-              ? { ...m, text: streamedText, isTyping: false, isStreaming: true }
-              : m
-          )));
-        }
-      });
-
-      if (response?.context) {
-        setConversationContext(response.context);
-      }
-      
-      // Get bot response text
-      const botResponseText = response.message || 'I apologize, but I encountered an issue. How else can I help you?';
-      
-      // Calculate response time
-      const responseTime = ((performance.now() - startTime) / 1000).toFixed(2);
-      console.log(`⚡ Streaky responded in ${responseTime}s`);
-
-      const botResponse = {
-        id: botMsgId,
-        text: botResponseText,
-        sender: 'bot',
-        timestamp: new Date().toISOString(),
-        isAIGenerated: mlServiceStatus === 'connected',
-        responseTime: `${responseTime}s`,
-        emotion: response.emotion,
-        sentiment: response.sentiment,
-        risk: response.risk,
-        isTyping: false,
-        isStreaming: false,
-      };
-
-      setMessages(prev => prev.map((m) => (m.id === botMsgId ? botResponse : m)));
-      setIsTyping(false);
-
-      // Speak the response if voice is enabled
-      if (voiceEnabled) {
-        setTimeout(() => speakMessage(botResponse.text), 300);
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      
-      // Final fallback to non-streaming API to preserve continuity.
-      try {
-        const fallbackResponse = await chatbotAPI.sendMessage(userMessage.text, conversationId, {
-          maxLength: 512,
-          temperature: 0.7,
-          mode: chatMode,
-          language: selectedLanguage,
-        });
-        setMessages(prev => {
-          const cleaned = prev.filter((m) => !(m.isStreaming && (m.text || '') === ''));
-          return [
-            ...cleaned,
-            {
-              id: Date.now() + 1,
-              text: fallbackResponse.message,
-              sender: 'bot',
-              timestamp: new Date().toISOString(),
-              isAIGenerated: true,
-              fallback: true,
-            },
-          ];
-        });
-      } catch {
-        const errorResponse = {
-          id: Date.now() + 1,
-          text: selectedLanguage === 'es' ? 'Lo siento, ha ocurrido un error. ¿Podrías intentarlo de nuevo?' :
-                selectedLanguage === 'fr' ? 'Désolé, une erreur s\'est produite. Pourriez-vous réessayer ?' :
-                'Sorry, something went wrong. Could you please try again?',
-          sender: 'bot',
-          timestamp: new Date().toISOString(),
-          isError: true
-        };
-        setMessages(prev => {
-          const cleaned = prev.filter((m) => !(m.isStreaming && (m.text || '') === ''));
-          return [...cleaned, errorResponse];
-        });
-      }
-      setIsTyping(false);
-    }
+  const loadConversation = async (id) => {
+    if (!id || id === conversationId) return;
+    const conversation = await chatbotAPI.getConversation(id);
+    if (!conversation) return;
+    setConversationId(conversation._id);
+    setChatMode(conversation.mode || 'therapeutic');
+    setMessages(normalizeMessages(conversation));
+    setLastRisk(null);
+    setRagInfo(null);
   };
 
   const clearConversation = async () => {
-    try {
-      // Clear conversation on backend if ML service is connected
-      if (mlServiceStatus === 'connected' && conversationId) {
-        await chatbotAPI.clearConversation(conversationId);
-      }
-    } catch (error) {
-      console.error('Error clearing conversation on server:', error);
+    if (conversationId) {
+      await chatbotAPI.clearConversation(conversationId);
+      setConversations((prev) => prev.filter((item) => item._id !== conversationId));
     }
-    
-    // Clear local state and generate new conversation ID
-    setMessages([]);
-    setConversationId(`chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+    startNewConversation();
   };
 
-  const formatTime = (timestamp) => {
-    return formatShortTime(timestamp);
+  const toggleListening = () => {
+    if (!recognitionRef.current) return;
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+      return;
+    }
+    recognitionRef.current.lang = selectedVoice;
+    recognitionRef.current.start();
+    setIsListening(true);
   };
 
-  const currentLanguage = languages.find(l => l.code === selectedLanguage) || languages[0];
+  const sendMessage = async () => {
+    const text = inputMessage.trim();
+    if (!text || isTyping) return;
 
-  
+    const userMessageId = `user-${Date.now()}`;
+    const botMessageId = `bot-${Date.now() + 1}`;
+    const userMessage = {
+      id: userMessageId,
+      sender: 'user',
+      text,
+      timestamp: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMessage, {
+      id: botMessageId,
+      sender: 'bot',
+      text: '',
+      timestamp: new Date().toISOString(),
+      isStreaming: true,
+      isAIGenerated: true,
+    }]);
+    setInputMessage('');
+    setIsTyping(true);
+    setLoadError('');
+
+    void sentimentAPI
+      .analyzeText(text, 'vader', { extractKeywords: true })
+      .then((sentiment) => {
+        setMessages((prev) => prev.map((message) => (
+          message.id === userMessageId ? { ...message, sentiment } : message
+        )));
+      })
+      .catch(() => null);
+
+    const started = performance.now();
+    let streamedText = '';
+
+    try {
+      const response = await chatbotAPI.sendMessageStream(
+        text,
+        conversationId,
+        {
+          maxLength: 640,
+          temperature: chatMode === 'informational' ? 0.45 : 0.7,
+          mode: chatMode,
+          language: selectedLanguage,
+        },
+        {
+          onMeta: (meta) => {
+            if (meta?.conversation_id) setConversationId(meta.conversation_id);
+            if (meta?.rag) setRagInfo(meta.rag);
+          },
+          onToken: (token) => {
+            streamedText += token;
+            setMessages((prev) => prev.map((message) => (
+              message.id === botMessageId
+                ? { ...message, text: streamedText, isStreaming: true }
+                : message
+            )));
+          },
+          onDone: (done) => {
+            if (done?.rag) setRagInfo(done.rag);
+          },
+        }
+      );
+
+      const responseTime = `${((performance.now() - started) / 1000).toFixed(1)}s`;
+      const finalText = response.message || streamedText || 'I am here with you. Could you share a little more?';
+      setLastRisk(response.risk || null);
+      if (response.conversationId) setConversationId(response.conversationId);
+
+      setMessages((prev) => prev.map((message) => (
+        message.id === botMessageId
+          ? {
+              ...message,
+              text: finalText,
+              timestamp: response.timestamp,
+              metadata: response.metadata,
+              sentiment: response.sentiment,
+              emotion: response.emotion,
+              risk: response.risk,
+              responseTime,
+              isStreaming: false,
+            }
+          : message
+      )));
+
+      speakMessage(finalText);
+      await loadConversations();
+    } catch (error) {
+      setLoadError(error.message || 'Chat response failed.');
+      setMessages((prev) => prev.map((message) => (
+        message.id === botMessageId
+          ? {
+              ...message,
+              text: "I could not reach the AI service just now. Your message is still important, and if this is urgent please contact emergency services or a crisis line.",
+              isStreaming: false,
+              isError: true,
+            }
+          : message
+      )));
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const statusClass = {
+    online: 'bg-emerald-500',
+    degraded: 'bg-amber-500',
+    checking: 'bg-sky-500',
+    offline: 'bg-rose-500',
+  }[serviceStatus] || 'bg-gray-400';
+  const ActiveRoleIcon = activeRole.icon;
 
   return (
-    <div className="relative max-w-4xl mx-auto h-[calc(100vh-8rem)] flex flex-col">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-purple-500 to-pink-600 rounded-t-2xl p-6 text-white">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center text-2xl">
-              🤖
+    <div className="mx-auto flex h-[calc(100vh-7rem)] w-full max-w-7xl flex-col gap-4 px-3 pb-4 sm:px-4 lg:grid lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <aside className="hidden min-h-0 rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900 lg:flex lg:flex-col">
+        <div className="flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-700">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-950 dark:text-white">Conversations</h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Stored memory</p>
+          </div>
+          <button
+            type="button"
+            onClick={startNewConversation}
+            className="rounded-md p-2 text-gray-600 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:text-gray-300 dark:hover:bg-gray-800"
+            title="New conversation"
+            aria-label="New conversation"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {conversations.length === 0 ? (
+            <p className="px-2 py-4 text-sm text-gray-500 dark:text-gray-400">No saved conversations yet.</p>
+          ) : conversations.map((conversation) => (
+            <button
+              type="button"
+              key={conversation._id}
+              onClick={() => loadConversation(conversation._id)}
+              className={`mb-2 w-full rounded-md border p-3 text-left transition ${
+                conversationId === conversation._id
+                  ? 'border-teal-400 bg-teal-50 text-teal-950 dark:border-teal-700 dark:bg-teal-950/40 dark:text-teal-50'
+                  : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800'
+              }`}
+            >
+              <span className="block truncate text-sm font-medium">{conversation.title || 'New conversation'}</span>
+              <span className="mt-1 flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                <Clock3 className="h-3 w-3" />
+                {formatShortTime(conversation.updatedAt)}
+              </span>
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900">
+        <header className="border-b border-gray-200 bg-gray-50 px-4 py-4 dark:border-gray-700 dark:bg-gray-950 sm:px-5">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-600 text-white">
+                  <Bot className="h-5 w-5" />
+                </span>
+                <div>
+                  <h1 className="text-lg font-semibold text-gray-950 dark:text-white">Healing Chat</h1>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    AI responses with role-specific prompting, memory, and knowledge retrieval.
+                  </p>
+                </div>
+              </div>
             </div>
-            <div>
-              <h1 className="text-xl font-semibold">Personal Healing Companion</h1>
-              <p className="text-purple-100 text-sm">Always here for you</p>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200">
+                <span className={`h-2.5 w-2.5 rounded-full ${statusClass}`} />
+                {serviceStatus === 'online' ? 'AI online' : serviceStatus}
+              </span>
+              <button
+                type="button"
+                onClick={refreshHealth}
+                className="rounded-md border border-gray-200 p-2 text-gray-600 hover:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                title="Refresh status"
+                aria-label="Refresh status"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={clearConversation}
+                className="rounded-md border border-gray-200 p-2 text-gray-600 hover:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                title="Clear current conversation"
+                aria-label="Clear current conversation"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
             </div>
           </div>
-          <div className="flex items-center space-x-4">
-            {/* Language Selector */}
-            <div className="relative">
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_auto] xl:items-end">
+            <div className="grid gap-2 sm:grid-cols-3">
+              {ROLE_OPTIONS.map((role) => {
+                const RoleIcon = role.icon;
+                const selected = chatMode === role.id;
+                return (
+                  <button
+                    type="button"
+                    key={role.id}
+                    onClick={() => setChatMode(role.id)}
+                    className={`rounded-lg border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-teal-500 ${
+                      selected
+                        ? 'border-teal-500 bg-teal-50 text-teal-950 dark:border-teal-600 dark:bg-teal-950/40 dark:text-teal-50'
+                        : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200'
+                    }`}
+                    aria-pressed={selected}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold">
+                      <RoleIcon className="h-4 w-4" />
+                      {role.label}
+                    </span>
+                    <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">{role.description}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
               <select
                 value={selectedLanguage}
-                onChange={(e) => setSelectedLanguage(e.target.value)}
-                aria-label="Select chat language"
-                className="bg-white/20 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/50"
+                onChange={(event) => setSelectedLanguage(event.target.value)}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+                aria-label="Response language"
               >
-                {languages.map((lang) => (
-                  <option key={lang.code} value={lang.code} className="text-gray-900">
-                    {lang.flag} {lang.name}
-                  </option>
+                {LANGUAGES.map((language) => (
+                  <option key={language.code} value={language.code}>{language.name}</option>
                 ))}
               </select>
-            </div>
-
-            {/* Mode Selector */}
-            <div className="relative">
-              <select
-                value={chatMode}
-                onChange={(e) => setChatMode(e.target.value)}
-                aria-label="Select chat mode"
-                className="bg-white/20 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-white/50"
-                title="Chat Mode"
-              >
-                <option value="therapeutic" className="text-gray-900">🧠 Therapeutic</option>
-                <option value="emotional" className="text-gray-900">💛 Emotional Support</option>
-                <option value="informational" className="text-gray-900">📘 Informational</option>
-              </select>
-            </div>
-            
-            {/* Voice Toggle */}
-            <button
-              onClick={toggleSpeech}
-              className={`p-2 rounded-lg transition-colors ${
-                voiceEnabled ? 'bg-white/20 hover:bg-white/30' : 'bg-red-500/20 hover:bg-red-500/30'
-              }`}
-              aria-label="Toggle voice output"
-              title="Toggle Voice"
-            >
-              {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
-            </button>
-
-            {/* Clear Conversation */}
-            <button
-              onClick={clearConversation}
-              className="p-2 rounded-lg bg-white/20 hover:bg-white/30 transition-colors"
-              aria-label="Clear conversation"
-              title="Clear Conversation"
-              disabled={messages.length === 0}
-            >
-              <MessageCircle className="w-5 h-5" />
-            </button>
-
-            {/* Context Panel Toggle */}
-            {conversationContext && (
               <button
-                onClick={() => setShowContextPanel(!showContextPanel)}
-                className={`p-2 rounded-lg transition-colors ${
-                  showContextPanel ? 'bg-white/30' : 'bg-white/20 hover:bg-white/30'
+                type="button"
+                onClick={() => {
+                  if (isSpeaking) {
+                    synthRef.current?.cancel();
+                    setIsSpeaking(false);
+                  }
+                  setVoiceEnabled((enabled) => !enabled);
+                }}
+                className={`rounded-md border p-2 focus:outline-none focus:ring-2 focus:ring-teal-500 ${
+                  voiceEnabled
+                    ? 'border-teal-400 bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-200'
+                    : 'border-gray-200 text-gray-600 dark:border-gray-700 dark:text-gray-300'
                 }`}
-                aria-label="Toggle conversation insights panel"
-                title="Show Conversation Insights"
+                title="Toggle voice output"
+                aria-label="Toggle voice output"
               >
-                <Brain className="w-5 h-5" />
+                {voiceEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
               </button>
-            )}
+            </div>
+          </div>
+        </header>
 
-            <div className="flex items-center space-x-2">
-              <div className={`w-3 h-3 rounded-full ${
-                mlServiceStatus === 'connected' ? 'bg-green-400 animate-pulse' :
-                mlServiceStatus === 'checking' ? 'bg-yellow-400 animate-pulse' :
-                'bg-red-400'
-              }`}></div>
-              <span className="text-sm text-purple-100">
-                {mlServiceStatus === 'connected' ? 
-                  `${llmServiceAvailable ? 'LLM' : 'Legacy'} Model: ${chatModel}` :
-                 mlServiceStatus === 'checking' ? 'Connecting to AI...' :
-                 'Fallback Mode'}
+        {(loadError || lastRisk?.level === 'high') && (
+          <div className={`border-b px-4 py-3 text-sm ${
+            lastRisk?.level === 'high'
+              ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200'
+              : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200'
+          }`}>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>
+                {lastRisk?.level === 'high'
+                  ? 'This conversation may involve immediate safety risk. Please contact local emergency services or a crisis line if there is danger now.'
+                  : loadError}
               </span>
-              {isTyping && (
-                <Loader2 className="w-4 h-4 animate-spin text-purple-200" />
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Context Insights Panel */}
-      {showContextPanel && conversationContext && (
-        <div className="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 p-4 border-b border-indigo-200 dark:border-indigo-800">
-          <div className="max-w-4xl mx-auto">
-            <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 mb-3 flex items-center">
-              <Brain className="w-4 h-4 mr-2" />
-              Conversation Insights
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {/* Engagement Level */}
-              <div className="bg-white/70 dark:bg-gray-800/70 rounded-lg p-3">
-                <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Engagement</p>
-                <p className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 capitalize">
-                  {conversationContext.engagement_level || 'New'}
-                </p>
-              </div>
-              
-              {/* Mood Indicators */}
-              {conversationContext.mood_indicators && conversationContext.mood_indicators.length > 0 && (
-                <div className="bg-white/70 dark:bg-gray-800/70 rounded-lg p-3 col-span-2">
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Detected Emotions</p>
-                  <div className="flex flex-wrap gap-1">
-                    {conversationContext.mood_indicators.map((mood, idx) => (
-                      <span
-                        key={idx}
-                        className={`text-xs px-2 py-1 rounded-full ${
-                          mood === 'positive' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
-                          mood === 'anxiety' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
-                          mood === 'depression' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' :
-                          mood === 'stress' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300' :
-                          'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
-                        }`}
-                      >
-                        {mood}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              {/* Conversation Type */}
-              <div className="bg-white/70 dark:bg-gray-800/70 rounded-lg p-3">
-                <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Mode</p>
-                <p className="text-sm font-semibold text-indigo-900 dark:text-indigo-100 capitalize">
-                  {conversationContext.conversation_type || chatMode}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Messages */}
-      <div className="flex-1 bg-white dark:bg-gray-800 overflow-y-auto p-6 space-y-4">
-        
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'} animate-fadeIn`}
-          >
-            <div
-              className={`max-w-xs lg:max-w-md px-4 py-3 rounded-2xl transition-all duration-300 ${
-                message.isTyping 
-                  ? 'bg-gray-200 dark:bg-gray-700 animate-pulse' 
-                  : message.sender === 'user'
-                  ? 'bg-blue-500 text-white ml-4 shadow-md hover:shadow-lg'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white mr-4 shadow-sm hover:shadow-md'
-              }`}
-            >
-              <div className="flex items-start space-x-2">
-                {message.sender === 'bot' && (
-                  <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-1 ${
-                    message.isTyping ? 'bg-gray-400 animate-bounce' : 'bg-purple-500'
-                  }`}>
-                    <Bot className="w-3 h-3 text-white" />
-                  </div>
-                )}
-                <div className="flex-1">
-                  {message.isTyping ? (
-                    <div className="flex items-center space-x-1 py-2">
-                      <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                      <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                      <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>
-                      <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-                        <div className="flex items-center space-x-2">
-                          <p className={`text-xs ${
-                            message.sender === 'user' ? 'text-blue-100' : 'text-gray-500 dark:text-gray-400'
-                          }`}>
-                            {formatTime(message.timestamp)}
-                          </p>
-                          {message.sender === 'bot' && message.isAIGenerated && (
-                            <span className="text-xs bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-full flex items-center">
-                              <Brain className="w-3 h-3 mr-1" />
-                              AI
-                            </span>
-                          )}
-                          {message.responseTime && (
-                            <span className="text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-1 rounded-full">
-                              ⚡ {message.responseTime}
-                            </span>
-                          )}
-                        </div>
-                        {message.sender === 'bot' && voiceEnabled && (
-                          <button
-                            onClick={() => speakMessage(message.text)}
-                            className="text-xs text-purple-500 hover:text-purple-600 ml-2"
-                          >
-                            🔊
-                          </button>
-                        )}
-                      </div>
-                      {message.sender === 'user' && message.sentiment && (
-                        <div className="mt-2">
-                          <SentimentCard 
-                            sentiment={message.sentiment}
-                            compact={true}
-                            showKeywords={false}
-                            className="inline-block"
-                          />
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-                {message.sender === 'user' && (
-                  <div className="w-6 h-6 bg-blue-400 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
-                    <User className="w-3 h-3 text-white" />
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {/* Typing Indicator */}
-        {isTyping && (
-          <div className="flex justify-start">
-            <div className="max-w-xs px-4 py-3 bg-gray-100 dark:bg-gray-700 rounded-2xl mr-4">
-              <div className="flex items-center space-x-2">
-                <div className="w-6 h-6 bg-purple-500 rounded-full flex items-center justify-center">
-                  <Bot className="w-3 h-3 text-white" />
-                </div>
-                <div className="flex space-x-1">
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce-gentle"></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce-gentle" style={{ animationDelay: '0.1s' }}></div>
-                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce-gentle" style={{ animationDelay: '0.2s' }}></div>
-                </div>
-              </div>
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
-      </div>
 
-      {/* Input */}
-      <div className="bg-white dark:bg-gray-800 rounded-b-2xl p-4 border-t border-gray-200 dark:border-gray-700">
-        <div className="flex space-x-3">
-          <input
-            ref={inputRef}
-            type="text"
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
-            placeholder={`Type your message in ${currentLanguage.name}...`}
-            className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-            disabled={isTyping}
-          />
-          
-          {/* Voice Input Button */}
-          <button
-            onClick={isListening ? stopListening : startListening}
-            disabled={isTyping}
-            className={`px-4 py-3 rounded-xl font-medium transition-all duration-300 ${
-              isListening
-                ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-                : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500'
-            }`}
-          >
-            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-          </button>
+        <div className="flex min-h-0 flex-1 flex-col bg-gray-50 dark:bg-gray-950">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-5">
+            <div className="mx-auto max-w-3xl space-y-4">
+              {messages.map((message) => {
+                const isUser = message.sender === 'user';
+                return (
+                  <article key={message.id} className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+                    {!isUser && (
+                      <span className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-600 text-white">
+                        <Bot className="h-4 w-4" />
+                      </span>
+                    )}
+                    <div className={`max-w-[86%] rounded-lg px-4 py-3 shadow-sm sm:max-w-[76%] ${
+                      isUser
+                        ? 'bg-teal-600 text-white'
+                        : message.isError
+                          ? 'border border-rose-200 bg-white text-rose-800 dark:border-rose-900 dark:bg-gray-900 dark:text-rose-200'
+                          : 'border border-gray-200 bg-white text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100'
+                    }`}>
+                      {message.isStreaming && !message.text ? (
+                        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Thinking with context
+                        </div>
+                      ) : (
+                        <p className="whitespace-pre-wrap break-words text-sm leading-6">{message.text}</p>
+                      )}
+                      <div className={`mt-2 flex flex-wrap items-center gap-2 text-xs ${
+                        isUser ? 'text-teal-50' : 'text-gray-500 dark:text-gray-400'
+                      }`}>
+                        <span>{formatShortTime(message.timestamp)}</span>
+                        {!isUser && message.isAIGenerated && (
+                          <span className="inline-flex items-center gap-1">
+                            <CheckCircle2 className="h-3 w-3" />
+                            LLM
+                          </span>
+                        )}
+                        {message.responseTime && <span>{message.responseTime}</span>}
+                        {!isUser && voiceEnabled && message.text && (
+                          <button
+                            type="button"
+                            onClick={() => speakMessage(message.text)}
+                            className="rounded p-1 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:hover:bg-gray-800"
+                            title="Read aloud"
+                            aria-label="Read aloud"
+                          >
+                            <Volume2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {isUser && message.sentiment && (
+                        <div className="mt-2">
+                          <SentimentCard sentiment={message.sentiment} compact showKeywords={false} />
+                        </div>
+                      )}
+                    </div>
+                    {isUser && (
+                      <span className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-800 text-white dark:bg-gray-700">
+                        <User className="h-4 w-4" />
+                      </span>
+                    )}
+                  </article>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
 
-          <button
-            onClick={() => sendMessage()}
-            disabled={!inputMessage.trim() || isTyping}
-            className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
-              inputMessage.trim() && !isTyping
-                ? 'bg-purple-500 hover:bg-purple-600 text-white hover:scale-105'
-                : 'bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Horizontal Features Carousel */}
-      <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-b-2xl p-4 border-t border-gray-200 dark:border-gray-700">
-        <div className="flex items-center justify-center mb-3">
-          <Heart className="w-4 h-4 text-purple-500 mr-2" />
-          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">24/7 AI Support Features</span>
-        </div>
-        
-        <div className="relative overflow-hidden">
-          <div className="flex animate-scroll-horizontal space-x-4">
-            {/* Duplicate content for seamless loop */}
-            {[...Array(2)].map((_, setIndex) => (
-              <div key={setIndex} className="flex space-x-4 flex-shrink-0">
-                <div className="flex items-center space-x-2 px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-600">
-                  <Globe className="w-4 h-4 text-blue-500" />
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Multilingual Support</span>
-                </div>
-                
-                <div className="flex items-center space-x-2 px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-600">
-                  <Mic className="w-4 h-4 text-green-500" />
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Voice Interaction</span>
-                </div>
-                
-                <div className="flex items-center space-x-2 px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-600">
-                  <MessageCircle className="w-4 h-4 text-purple-500" />
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Personalized Responses</span>
-                </div>
-                
-                <div className="flex items-center space-x-2 px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-600">
-                  <Lightbulb className="w-4 h-4 text-yellow-500" />
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Professional Guidance</span>
-                </div>
-                
-                <div className="flex items-center space-x-2 px-3 py-2 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-600">
-                  <Heart className="w-4 h-4 text-pink-500" />
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Always Here for You</span>
-                </div>
+          <div className="border-t border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+            <div className="mx-auto max-w-3xl">
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 dark:bg-gray-800">
+                  <MessageCircle className="h-3.5 w-3.5" />
+                  {conversationId ? 'Memory active' : 'New conversation'}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 dark:bg-gray-800">
+                  <ActiveRoleIcon className="h-3.5 w-3.5" />
+                  {activeRole.label}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 dark:bg-gray-800">
+                  <Brain className="h-3.5 w-3.5" />
+                  RAG {ragInfo?.available ? `${ragInfo.document_count || 0} docs` : 'pending'}
+                </span>
+                {modelInfo?.available !== undefined && (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 dark:bg-gray-800">
+                    <Bot className="h-3.5 w-3.5" />
+                    Ollama {modelInfo.available ? 'ready' : 'checking'}
+                  </span>
+                )}
               </div>
-            ))}
+
+              <div className="flex items-end gap-2">
+                <textarea
+                  ref={inputRef}
+                  value={inputMessage}
+                  onChange={(event) => setInputMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  rows={1}
+                  placeholder={`Message Healing Chat in ${LANGUAGES.find((language) => language.code === selectedLanguage)?.name || 'English'}...`}
+                  className="max-h-36 min-h-[2.75rem] flex-1 resize-none rounded-lg border border-gray-300 bg-gray-50 px-4 py-3 text-sm text-gray-950 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-gray-700 dark:bg-gray-950 dark:text-white dark:placeholder-gray-500"
+                  disabled={isTyping}
+                />
+                <button
+                  type="button"
+                  onClick={toggleListening}
+                  disabled={!recognitionRef.current || isTyping}
+                  className={`rounded-lg border p-3 focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:cursor-not-allowed disabled:opacity-50 ${
+                    isListening
+                      ? 'border-rose-400 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-200'
+                      : 'border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'
+                  }`}
+                  title="Voice input"
+                  aria-label="Voice input"
+                >
+                  {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={sendMessage}
+                  disabled={!inputMessage.trim() || isTyping}
+                  className="rounded-lg bg-teal-600 p-3 text-white transition hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500 dark:focus:ring-offset-gray-900"
+                  title="Send message"
+                  aria-label="Send message"
+                >
+                  {isTyping ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                Healing Chat can support reflection and coping, but it is not a crisis service or medical provider.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 };

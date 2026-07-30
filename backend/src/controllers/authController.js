@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { validationResult } from 'express-validator';
 import { User } from '../models/User.js';
 import { Session } from '../models/Session.js';
 import { signAccessToken } from '../utils/jwt.js';
@@ -9,21 +10,14 @@ function normalizeUsername(fullName, email) {
   return `${base || 'user'}_${Math.floor(Math.random() * 10000)}`;
 }
 
-function validateEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
-}
-
 export async function register(req, res) {
-  const { full_name, email, password, username } = req.body || {};
-  if (!full_name || !email || !password) {
-    throw new ApiError(400, 'full_name, email and password are required');
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
   }
-  if (!validateEmail(email)) {
-    throw new ApiError(400, 'Invalid email format');
-  }
-  if (String(password).length < 8) {
-    throw new ApiError(400, 'Password must be at least 8 characters');
-  }
+
+  const { full_name, email, password, username } = req.body;
 
   const existing = await User.findOne({ email: email.toLowerCase() });
   if (existing) {
@@ -71,13 +65,13 @@ export async function register(req, res) {
 }
 
 export async function login(req, res) {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    throw new ApiError(400, 'email and password are required');
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
   }
-  if (!validateEmail(email)) {
-    throw new ApiError(400, 'Invalid email format');
-  }
+
+  const { email, password } = req.body;
 
   const user = await User.findOne({ email: email.toLowerCase() });
   if (!user) {

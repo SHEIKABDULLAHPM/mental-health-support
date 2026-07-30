@@ -36,10 +36,8 @@ const proxyDefaults = {
         error: {
           code: 'UPSTREAM_UNAVAILABLE',
           message: 'ML service unavailable',
-          details: err?.message || null,
           requestId: req.requestId,
         },
-        detail: 'ML service unavailable',
         details: err?.message || null,
       });
     },
@@ -47,12 +45,12 @@ const proxyDefaults = {
 };
 
 // Preserve all existing ML API contracts under /api/* for frontend compatibility.
+// Uses pathFilter (not Express mount) so req.url retains the /api prefix.
 router.use(
-  '/api',
   createProxyMiddleware({
     ...proxyDefaults,
     target: env.mlServiceUrl,
-    pathRewrite: (path) => `/api${path}`,
+    pathFilter: '/api',
   })
 );
 

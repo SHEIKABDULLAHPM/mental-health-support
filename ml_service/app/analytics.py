@@ -56,13 +56,19 @@ _catalog_emb = None
 
 def _ensure_embedder():
     global _embedder, _catalog_emb
-    if _embedder is None:
+    if _embedder is not None:
+        return True
+    try:
         from sentence_transformers import SentenceTransformer
         model_name = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
         _embedder = SentenceTransformer(model_name)
-    if _catalog_emb is None:
-        texts = [f"{it['title']}. {it['description']}" for it in _catalog]
-        _catalog_emb = _embedder.encode(texts, normalize_embeddings=True)
+        if _catalog_emb is None:
+            texts = [f"{it['title']}. {it['description']}" for it in _catalog]
+            _catalog_emb = _embedder.encode(texts, normalize_embeddings=True)
+        return True
+    except Exception:
+        logger.warning("sentence-transformers not available, /api/recommendations will use fallback")
+        return False
 
 
 @analytics_bp.route("/recommendations", methods=["POST"])
@@ -70,10 +76,18 @@ def recommendations_api():
     data = request.get_json() or {}
     query = (data.get("query") or "help me relax").strip()
     k = int(data.get("k", 3))
-    _ensure_embedder()
-    q_emb = _embedder.encode([query], normalize_embeddings=True)[0]
-    # cosine sim
+    if not _ensure_embedder():
+        import random
+        items = []
+        pool = list(range(len(_catalog)))
+        random.shuffle(pool)
+        for i in pool[:k]:
+            it = dict(_catalog[i])
+            it["score"] = 0.5
+            items.append(it)
+        return jsonify({"status": "success", "data": {"items": items, "fallback": True}}), 200
     import numpy as np
+    q_emb = _embedder.encode([query], normalize_embeddings=True)[0]
     sims = np.dot(_catalog_emb, q_emb)
     idx = np.argsort(-sims)[:k]
     items = []

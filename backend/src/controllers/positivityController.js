@@ -1,33 +1,41 @@
-import mongoose from 'mongoose';
+import { validationResult } from 'express-validator';
 import { ApiError } from '../utils/errors.js';
 import { sendSuccess } from '../utils/response.js';
 import { PositivityContent } from '../models/PositivityContent.js';
 import { PositivityInteraction } from '../models/PositivityInteraction.js';
 
 export async function listPositivityContent(req, res) {
-  const { type = null, language = null, limit = 50 } = req.query;
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
+  const { type, language, limit = 50 } = req.query;
   const query = { active: true };
-  if (type) query.contentType = String(type).trim();
-  if (language) query.language = String(language).trim();
+  if (type) query.contentType = type;
+  if (language) query.language = language;
 
   const rows = await PositivityContent.find(query)
     .sort({ createdAt: -1 })
-    .limit(Math.min(Number(limit) || 50, 200));
+    .limit(Math.min(Number(limit), 200));
 
   return sendSuccess(req, res, rows);
 }
 
 export async function createPositivityContent(req, res) {
-  const payload = req.body || {};
-  if (!payload.text) {
-    throw new ApiError(400, 'text is required');
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
   }
 
+  const payload = req.body;
   const row = await PositivityContent.create({
     contentType: payload.contentType || 'quote',
-    text: String(payload.text).trim(),
-    author: String(payload.author || '').trim(),
-    tags: Array.isArray(payload.tags) ? payload.tags : [],
+    text: payload.text,
+    author: payload.author || '',
+    tags: payload.tags || [],
     language: payload.language || 'en',
     active: payload.active !== false,
   });
@@ -36,12 +44,14 @@ export async function createPositivityContent(req, res) {
 }
 
 export async function addPositivityInteraction(req, res) {
-  const { user } = req.auth;
-  const { contentId, action, context = {} } = req.body || {};
-
-  if (!mongoose.isValidObjectId(contentId)) {
-    throw new ApiError(400, 'Valid contentId is required');
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
   }
+
+  const { user } = req.auth;
+  const { contentId, action, context = {} } = req.body;
 
   const content = await PositivityContent.findById(contentId, { _id: 1 });
   if (!content) {

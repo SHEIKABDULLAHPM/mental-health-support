@@ -50,10 +50,18 @@ const ReflectionWall = () => {
         setBatchAnalyzing(true);
         const texts = reflections.map(r => r.text);
         
-        // Use Classical model for efficient batch processing
-        const sentiments = await sentimentAPI.analyzeBatch(texts, 'classical', {
-          timeout: 30000 // 30 second timeout for batch
-        });
+        // Use VADER for batch processing (lightweight, always available)
+        let sentiments;
+        try {
+          sentiments = await sentimentAPI.analyzeBatch(texts, 'vader', {
+            timeout: 15000
+          });
+        } catch (vaderError) {
+          console.warn('VADER batch failed, trying individual analysis...', vaderError);
+          sentiments = await Promise.all(
+            texts.map(t => sentimentAPI.analyzeText(t, 'vader', { timeout: 5000 }))
+          );
+        }
         
         // Map sentiments to reflection IDs
         const sentimentMap = {};
@@ -107,36 +115,12 @@ const ReflectionWall = () => {
     
     setSentimentError(null); // Clear previous errors
     
-    try {
-      setIsSentimentLoading(true);
-      
-      // Use Classical model for consistency with batch analysis
-      let sentiment;
       try {
-        sentiment = await sentimentAPI.analyzeText(
-          text,
-          'classical',
-          { 
-            extractKeywords: true,
-            timeout: 10000 
-          }
-        );
-      } catch (classicalError) {
-        console.warn('Classical sentiment analysis failed, trying BiLSTM...', classicalError);
+        setIsSentimentLoading(true);
         
-        // Fallback to BiLSTM if Classical fails
+        // Use VADER (lightweight, always available) for reflection sentiment
+        let sentiment;
         try {
-          sentiment = await sentimentAPI.analyzeText(
-            text,
-            'bilstm',
-            { 
-              extractKeywords: true,
-              timeout: 15000 
-            }
-          );
-        } catch (bilstmError) {
-          // Final fallback to VADER
-          console.warn('BiLSTM failed, using VADER...', bilstmError);
           sentiment = await sentimentAPI.analyzeText(
             text,
             'vader',
@@ -145,10 +129,25 @@ const ReflectionWall = () => {
               timeout: 5000 
             }
           );
+        } catch (vaderError) {
+          console.warn('VADER failed, trying ensemble...', vaderError);
+          // Fallback to ensemble
+          try {
+            sentiment = await sentimentAPI.analyzeText(
+              text,
+              'ensemble',
+              { 
+                extractKeywords: true,
+                timeout: 10000 
+              }
+            );
+          } catch (ensembleError) {
+            console.error('All sentiment models failed', ensembleError);
+            throw new Error('Unable to analyze sentiment. Please try again.');
+          }
         }
-      }
-      
-      setSentiment(sentiment);
+        
+        setSentiment(sentiment);
       
     } catch (error) {
       console.error('All sentiment analysis attempts failed', error);

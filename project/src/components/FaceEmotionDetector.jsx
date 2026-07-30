@@ -161,7 +161,8 @@ const FaceEmotionDetector = ({
 
       if (!response.ok || result.status !== 'success') {
         if (response.status === 503 || result?.status === 'unavailable') {
-          throw new Error('SERVICE_UNAVAILABLE:Face emotion detection is temporarily unavailable');
+          const backendMessage = toErrorMessage(result, 'Face emotion detection is temporarily unavailable');
+          throw new Error(`SERVICE_UNAVAILABLE:${backendMessage}`);
         }
         const backendMessage = toErrorMessage(result, 'Face emotion detection failed');
         const backendError = backendMessage.toLowerCase();
@@ -232,7 +233,8 @@ const FaceEmotionDetector = ({
           clearInterval(intervalRef.current);
           intervalRef.current = null;
         }
-        setError('Face emotion detection is temporarily unavailable');
+        const detailedError = errorMsg.replace('SERVICE_UNAVAILABLE:', '').trim();
+        setError(detailedError);
         return;
       }
 
@@ -261,7 +263,9 @@ const FaceEmotionDetector = ({
       }
     } else {
       if (serviceUnavailable) {
-        setError('Face emotion detection is temporarily unavailable');
+        // The error is already set to a detailed message.
+        // Re-setting it with a generic one is not ideal.
+        // Let's just make sure isActive is false.
         setIsActive(false);
         return;
       }

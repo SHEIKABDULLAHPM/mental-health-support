@@ -1,3 +1,5 @@
+import { validationResult } from 'express-validator';
+import { ApiError } from '../utils/errors.js';
 import { UserPreference } from '../models/UserPreference.js';
 import { sendSuccess } from '../utils/response.js';
 
@@ -11,14 +13,20 @@ export async function getMyPreferences(req, res) {
 }
 
 export async function upsertMyPreferences(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
   const { user } = req.auth;
-  const payload = req.body || {};
+  const payload = req.body;
 
   const update = {
-    interests: Array.isArray(payload.interests) ? payload.interests : undefined,
-    goals: Array.isArray(payload.goals) ? payload.goals : undefined,
-    moodPatterns: Array.isArray(payload.moodPatterns) ? payload.moodPatterns : undefined,
-    activityPreferences: Array.isArray(payload.activityPreferences) ? payload.activityPreferences : undefined,
+    interests: payload.interests,
+    goals: payload.goals,
+    moodPatterns: payload.moodPatterns,
+    activityPreferences: payload.activityPreferences,
     language: payload.language,
     onboardingVersion: payload.onboardingVersion,
   };

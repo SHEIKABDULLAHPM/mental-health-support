@@ -1,3 +1,4 @@
+import { validationResult } from 'express-validator';
 import mongoose from 'mongoose';
 import { ApiError } from '../utils/errors.js';
 import { sendSuccess } from '../utils/response.js';
@@ -10,15 +11,21 @@ export async function listChallengeCatalog(req, res) {
 }
 
 export async function createChallenge(req, res) {
-  const payload = req.body || {};
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
+  const payload = req.body;
   const row = await ChallengeCatalog.create({
-    slug: String(payload.slug || '').trim(),
-    title: String(payload.title || '').trim(),
-    description: String(payload.description || '').trim(),
+    slug: payload.slug,
+    title: payload.title,
+    description: payload.description || '',
     difficulty: payload.difficulty || 'easy',
-    points: Number(payload.points || 10),
-    target: Number(payload.target || 7),
-    tags: Array.isArray(payload.tags) ? payload.tags : [],
+    points: payload.points || 10,
+    target: payload.target || 7,
+    tags: payload.tags || [],
     active: payload.active !== false,
   });
   return sendSuccess(req, res, row, { statusCode: 201 });
@@ -33,16 +40,18 @@ export async function listMyChallenges(req, res) {
 }
 
 export async function startChallenge(req, res) {
-  const { user } = req.auth;
-  const { challengeId } = req.body || {};
-
-  if (!mongoose.isValidObjectId(challengeId)) {
-    throw new ApiError(400, 'Valid challengeId is required');
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
   }
+
+  const { user } = req.auth;
+  const { challengeId } = req.body;
 
   const challenge = await ChallengeCatalog.findById(challengeId);
   if (!challenge || !challenge.active) {
-    throw new ApiError(404, 'Challenge not found');
+    throw new ApiError(404, 'Challenge not found or not active');
   }
 
   const row = await UserChallengeProgress.findOneAndUpdate(
@@ -62,25 +71,22 @@ export async function startChallenge(req, res) {
 }
 
 export async function updateMyChallengeProgress(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
   const { user } = req.auth;
   const { id } = req.params;
-  const { progress } = req.body || {};
-
-  if (!mongoose.isValidObjectId(id)) {
-    throw new ApiError(400, 'Invalid progress id');
-  }
+  const { progress } = req.body;
 
   const row = await UserChallengeProgress.findOne({ _id: id, userId: user._id });
   if (!row) {
     throw new ApiError(404, 'Progress record not found');
   }
 
-  const nextProgress = Number(progress);
-  if (!Number.isFinite(nextProgress) || nextProgress < 0) {
-    throw new ApiError(400, 'progress must be a non-negative number');
-  }
-
-  row.progress = nextProgress;
+  row.progress = progress;
   if (row.progress >= row.target) {
     row.state = 'completed';
     row.completedAt = new Date();

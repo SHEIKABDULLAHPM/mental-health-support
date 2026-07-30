@@ -18,16 +18,18 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 try:
     from deepface import DeepFace
-except Exception:  # pragma: no cover - runtime dependency may be missing
+except Exception as exc:  # pragma: no cover - runtime dependency may be missing
     DeepFace = None
 
 load_dotenv()
+
+ENABLE_FACE_EMOTION = os.getenv("ENABLE_FACE_EMOTION", "true").lower() == "true"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app)
 
 SENTIMENT = SentimentIntensityAnalyzer()
 FACE_MODEL_BACKEND = os.getenv("FACE_MODEL_BACKEND", "opencv")
@@ -39,8 +41,7 @@ class FaceEmotionService:
     def __init__(self):
         self._ready = False
         self._reason = "Emotion model not ready"
-        self._model = None
-        self._load_model()
+        self._loaded = False
 
     @property
     def ready(self) -> bool:
@@ -50,36 +51,39 @@ class FaceEmotionService:
     def reason(self) -> str:
         return self._reason
 
-    def _load_model(self) -> None:
+    def ensure_loaded(self) -> None:
+        """DeepFace.analyze() handles model loading internally; this just verifies DeepFace is available."""
+        if self._loaded:
+            return
+        self._loaded = True
         if DeepFace is None:
             self._ready = False
             self._reason = "DeepFace is not installed"
-            logger.warning("Face emotion model not ready: %s", self._reason)
             return
-
-        try:
-            # Explicit warm-up to avoid per-request cold starts.
-            self._model = DeepFace.build_model("Emotion")
-            self._ready = True
-            self._reason = ""
-            logger.info("Face emotion model loaded successfully")
-        except Exception as exc:
-            self._ready = False
-            self._reason = f"Emotion model not ready: {exc}"
-            logger.exception("Failed to load face emotion model")
-
+        self._ready = True
+        self._reason = ""
+        logger.info("Face emotion detection ready (DeepFace loads models internally)")
     def analyze(self, image_bgr: np.ndarray) -> Tuple[str, float]:
+        self.ensure_loaded()
         if not self._ready:
             raise RuntimeError(self._reason or "Emotion model not ready")
 
-        result = DeepFace.analyze(
-            img_path=image_bgr,
-            actions=["emotion"],
-            enforce_detection=False,
-            detector_backend=FACE_MODEL_BACKEND,
-            prog_bar=False,
-            silent=True,
-        )
+        import time as _time
+        for attempt in range(2):
+            try:
+                result = DeepFace.analyze(
+                    img_path=image_bgr,
+                    actions=["emotion"],
+                    enforce_detection=False,
+                    detector_backend=FACE_MODEL_BACKEND,
+                )
+                break
+            except Exception as exc:
+                if attempt == 0 and "model" in str(exc).lower():
+                    logger.warning("DeepFace inference error, retrying once: %s", exc)
+                    _time.sleep(1)
+                    continue
+                raise
 
         if isinstance(result, list):
             result = result[0] if result else {}
@@ -87,13 +91,11 @@ class FaceEmotionService:
         dominant = str(result.get("dominant_emotion") or "neutral").lower()
         emotions = result.get("emotion") or {}
         confidence = float(emotions.get(dominant, 0.0)) / 100.0
-
-        # Clamp to a safe numeric range.
         confidence = max(0.0, min(1.0, confidence))
         return dominant, confidence
 
 
-FACE_EMOTION = FaceEmotionService()
+FACE_EMOTION = FaceEmotionService() if ENABLE_FACE_EMOTION else None
 
 
 def _safe_register(module_path: str, symbol: str, name: str) -> bool:
@@ -155,8 +157,11 @@ def _read_image_from_request() -> Tuple[Optional[np.ndarray], Optional[str]]:
 
 
 def _detect_face(image_bgr: np.ndarray) -> Dict:
+    if FACE_EMOTION is None:
+        return {"ok": False, "status": "unavailable", "message": "Face emotion feature is disabled"}
+    FACE_EMOTION.ensure_loaded()
     if not FACE_EMOTION.ready:
-        return {"ok": False, "status": "unavailable", "message": "Emotion model not ready"}
+        return {"ok": False, "status": "unavailable", "message": FACE_EMOTION.reason or "Emotion model not ready"}
 
     try:
         emotion, confidence = FACE_EMOTION.analyze(image_bgr)
@@ -215,8 +220,8 @@ def health_check():
                 "status": "healthy",
                 "service": "ml-service",
                 "face_model": {
-                    "ready": FACE_EMOTION.ready,
-                    "reason": FACE_EMOTION.reason if not FACE_EMOTION.ready else None,
+                    "ready": FACE_EMOTION.ready if FACE_EMOTION else False,
+                    "reason": (FACE_EMOTION.reason if not FACE_EMOTION.ready else None) if FACE_EMOTION else (None if ENABLE_FACE_EMOTION else "Face emotion feature is disabled"),
                 },
                 "registered_blueprints": registered,
                 "timestamp": datetime.utcnow().isoformat(),
@@ -225,6 +230,21 @@ def health_check():
         200,
     )
 
+
+@app.route("/api/emotions", methods=["GET"])
+def list_emotions():
+    return jsonify({
+        "status": "success",
+        "emotions": [
+            {"name": "happy", "label": "Happy"},
+            {"name": "sad", "label": "Sad"},
+            {"name": "neutral", "label": "Neutral"},
+            {"name": "angry", "label": "Angry"},
+            {"name": "fearful", "label": "Fearful"},
+            {"name": "surprised", "label": "Surprised"},
+            {"name": "disgusted", "label": "Disgusted"},
+        ]
+    }), 200
 
 @app.route("/api/detect-emotion", methods=["POST"])
 def detect_emotion():
@@ -240,7 +260,7 @@ def detect_face_emotion():
 
     result = _detect_face(image_bgr)
     if result.get("status") == "unavailable":
-        return jsonify({"status": "unavailable", "message": "Emotion model not ready"}), 503
+        return jsonify({"status": "unavailable", "message": result.get("message", "Emotion model not ready")}), 503
     if not result.get("ok"):
         return jsonify({"status": "error", "message": result.get("message", "Emotion inference failed")}), 500
 
@@ -265,7 +285,7 @@ def analyze_face_pattern():
 
     result = _detect_face(image_bgr)
     if result.get("status") == "unavailable":
-        return jsonify({"status": "unavailable", "message": "Emotion model not ready"}), 503
+        return jsonify({"status": "unavailable", "message": result.get("message", "Emotion model not ready")}), 503
     if not result.get("ok"):
         return jsonify({"status": "error", "error": result.get("message", "Emotion inference failed")}), 500
 

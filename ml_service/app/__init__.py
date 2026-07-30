@@ -1,3 +1,3 @@
 """
-App package for modular chatbot components: model, memory, safety, and routes.
+ML service blueprints: sentiment, mood, recommendations, analytics, games.
 """

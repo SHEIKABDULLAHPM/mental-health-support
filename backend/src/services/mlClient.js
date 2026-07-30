@@ -60,19 +60,24 @@ async function withRetry(label, fn, maxAttempts = 3, baseDelayMs = 250) {
   throw lastError;
 }
 
-export async function sendChatToMl({ token, message, conversationId, mode, temperature, sentiment }) {
+export async function sendChatToMl({ token, message, conversationId, mode, temperature, sentiment, history, userId }) {
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+  const payload = {
+    message,
+    conversation_id: conversationId,
+    user_id: userId,
+    mode,
+    temperature,
+    max_tokens: 256,
+    history,
+    sentiment,
+  };
 
   try {
     const llmRes = await withRetry('llm:/api/chat', () => llm.post(
       '/api/chat',
-      {
-        message,
-        conversation_id: conversationId,
-        mode,
-        temperature,
-        max_tokens: 256,
-      },
+      payload,
       { headers }
     ));
     return { source: 'llm', data: llmRes.data };
@@ -82,14 +87,10 @@ export async function sendChatToMl({ token, message, conversationId, mode, tempe
       message: llmError?.message,
       status: llmError?.response?.status,
     });
-    const legacyRes = await withRetry('ml:/api/chat/send', () => ml.post(
+    const legacyRes = await withRetry('llm:/api/chat/send', () => llm.post(
       '/api/chat/send',
       {
-        message,
-        conversation_id: conversationId,
-        mode,
-        temperature,
-        sentiment,
+        ...payload,
         max_length: 256,
       },
       { headers }

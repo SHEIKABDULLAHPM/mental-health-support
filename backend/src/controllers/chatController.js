@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { validationResult } from 'express-validator';
 import { Conversation } from '../models/Conversation.js';
 import { AnalysisResult } from '../models/AnalysisResult.js';
 import { ReportLog } from '../models/ReportLog.js';
@@ -31,7 +32,8 @@ function initStreamHeaders(res) {
 }
 
 function mapMlToAssistantPayload(mlPayload) {
-  const data = mlPayload?.data || {};
+  const envelope = mlPayload?.data || {};
+  const data = envelope?.data && typeof envelope.data === 'object' ? envelope.data : envelope;
   const assistant = data.assistant_message || data.response || 'I am here to support you.';
   return {
     assistant,
@@ -41,18 +43,21 @@ function mapMlToAssistantPayload(mlPayload) {
     meta: {
       model: data.model || data.model_info?.model || 'unknown',
       source: mlPayload?.source || 'unknown',
+      rag: data.rag || null,
       raw: data,
     },
   };
 }
 
 export async function sendMessage(req, res) {
-  const { user } = req.auth;
-  const { message, conversation_id, mode = 'therapeutic', sentiment = null, temperature = 0.7 } = req.body || {};
-
-  if (!message || !String(message).trim()) {
-    throw new ApiError(400, 'message is required');
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
   }
+
+  const { user } = req.auth;
+  const { message, conversation_id, mode = 'therapeutic', sentiment = null, temperature = 0.7 } = req.body;
 
   let conversation = null;
   if (conversation_id) {
@@ -67,18 +72,26 @@ export async function sendMessage(req, res) {
     });
   }
 
+  const prevMessages = [...conversation.messages];
   conversation.messages.push({ sender: 'user', text: String(message).trim(), createdAt: new Date() });
+
+  const history = prevMessages.map((m) => ({
+    role: m.sender === 'assistant' ? 'assistant' : 'user',
+    content: m.text,
+  }));
 
   let mlPayload = null;
   try {
-    mlPayload = await sendChatToMl({
-      token: req.auth.token,
-      message: String(message).trim(),
-      conversationId: String(conversation._id),
-      mode,
-      temperature,
-      sentiment,
-    });
+      mlPayload = await sendChatToMl({
+        token: req.auth.token,
+        message: String(message).trim(),
+        conversationId: String(conversation._id),
+        userId: String(user._id),
+        mode,
+        temperature,
+        sentiment,
+        history,
+      });
   } catch (error) {
     await ReportLog.create({
       userId: user._id,
@@ -142,12 +155,14 @@ export async function sendMessage(req, res) {
 }
 
 export async function streamMessage(req, res) {
-  const { user } = req.auth;
-  const { message, conversation_id, mode = 'therapeutic', sentiment = null, temperature = 0.7 } = req.body || {};
-
-  if (!message || !String(message).trim()) {
-    throw new ApiError(400, 'message is required');
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
   }
+
+  const { user } = req.auth;
+  const { message, conversation_id, mode = 'therapeutic', sentiment = null, temperature = 0.7 } = req.body;
 
   let conversation = null;
   if (conversation_id) {
@@ -163,7 +178,13 @@ export async function streamMessage(req, res) {
   }
 
   const userMessageText = String(message).trim();
+  const prevMessages = [...conversation.messages];
   conversation.messages.push({ sender: 'user', text: userMessageText, createdAt: new Date() });
+
+  const history = prevMessages.map((m) => ({
+    role: m.sender === 'assistant' ? 'assistant' : 'user',
+    content: m.text,
+  }));
 
   initStreamHeaders(res);
   writeNdjson(res, {
@@ -186,9 +207,12 @@ export async function streamMessage(req, res) {
       body: JSON.stringify({
         message: userMessageText,
         conversation_id: String(conversation._id),
+        user_id: String(user._id),
         mode,
         temperature,
         max_tokens: 256,
+        sentiment,
+        history,
       }),
     });
 
@@ -242,9 +266,11 @@ export async function streamMessage(req, res) {
         token: req.auth.token,
         message: userMessageText,
         conversationId: String(conversation._id),
+        userId: String(user._id),
         mode,
         temperature,
         sentiment,
+        history,
       });
 
       const normalizedFallback = mapMlToAssistantPayload(fallbackPayload);
@@ -292,6 +318,7 @@ export async function streamMessage(req, res) {
     meta: {
       model: donePayload?.model || 'unknown',
       source: donePayload?.fallback ? 'fallback' : 'stream',
+      rag: donePayload?.rag || null,
       raw: donePayload || {},
     },
   };
@@ -340,6 +367,7 @@ export async function streamMessage(req, res) {
     sentiment: normalized.sentiment,
     emotion: normalized.emotion,
     risk: normalized.risk,
+    rag: normalized.meta.rag,
     model_info: normalized.meta,
     streamed,
     fallback: Boolean(donePayload?.fallback),
@@ -354,11 +382,14 @@ export async function listMyConversations(req, res) {
 }
 
 export async function getMyConversation(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
   const { user } = req.auth;
   const { id } = req.params;
-  if (!mongoose.isValidObjectId(id)) {
-    throw new ApiError(400, 'Invalid conversation id');
-  }
   const row = await Conversation.findOne({ _id: id, userId: user._id });
   if (!row) {
     throw new ApiError(404, 'Conversation not found');
@@ -367,11 +398,14 @@ export async function getMyConversation(req, res) {
 }
 
 export async function clearMyConversation(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
   const { user } = req.auth;
   const { id } = req.params;
-  if (!mongoose.isValidObjectId(id)) {
-    throw new ApiError(400, 'Invalid conversation id');
-  }
 
   const deleted = await Conversation.findOneAndDelete({ _id: id, userId: user._id });
   if (!deleted) {
@@ -387,11 +421,14 @@ export async function clearMyConversation(req, res) {
 }
 
 export async function getMyConversationAssessment(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const messages = errors.array().map(e => e.msg);
+    throw new ApiError(400, `Validation failed: ${messages.join(', ')}`);
+  }
+
   const { user } = req.auth;
   const { id } = req.params;
-  if (!mongoose.isValidObjectId(id)) {
-    throw new ApiError(400, 'Invalid conversation id');
-  }
 
   const conversation = await Conversation.findOne({ _id: id, userId: user._id }, { _id: 1, latestAnalysisId: 1 });
   if (!conversation) {
